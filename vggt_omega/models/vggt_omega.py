@@ -38,13 +38,20 @@ class VGGTOmega(nn.Module):
             images = images.unsqueeze(0) # Add batch dimension if missing, resulting in shape (1, N, C, H, W)
 
         amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        
+        # Aggregate the input images into camera/register tokens and patch tokens using the aggregator.
         with torch.autocast(device_type="cuda", dtype=amp_dtype):
             aggregated_tokens_list, patch_token_start = self.aggregator(images)
 
+        # The aggregator is designed to cache the final layer's output for efficiency, 
+        # so we can directly use it for the heads instead of re-passing through the aggregator.
         final_tokens = aggregated_tokens_list[-1]
         if final_tokens is None:
             raise ValueError("Aggregator did not cache the final layer, which VGGTOmega needs.")
 
+        # This block predicts all the outputs from the heads with autocast disabled, 
+        # since the heads are not optimized for mixed precision and may have small layers 
+        # that can underflow with float16.
         predictions: dict[str, torch.Tensor] = {}
         predictions[ModelOutputKeys.CAMERA_AND_REGISTER_TOKENS] = final_tokens[:, :, :patch_token_start].contiguous()
         with torch.autocast(device_type="cuda", enabled=False):

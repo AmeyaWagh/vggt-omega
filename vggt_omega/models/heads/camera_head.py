@@ -47,6 +47,12 @@ class CameraHead(nn.Module):
         aggregated_tokens_list: list[torch.Tensor | None],
         patch_token_start: int,
     ) -> torch.Tensor:
+        """ Predict camera parameters from the camera/register tokens in the aggregated tokens list.
+         The camera/register tokens are expected to be in the first part of the token dimension,
+         before the patch tokens which start at patch_token_start. The camera head applies several transformer blocks
+         to allow information exchange across frames, and then predicts the camera parameters from the first token (index 0) 
+         of the camera/register tokens, which is designated as the camera token.
+        """
         tokens = aggregated_tokens_list[-1]
         if tokens is None:
             raise ValueError("Aggregator did not cache the final layer, which CameraHead needs.")
@@ -60,17 +66,32 @@ class CameraHead(nn.Module):
         if tokens.dtype != torch.float32:
             tokens = tokens.float()
 
+        # Access the camera/register tokens, which are expected to be in the first part of the token dimension before the patch tokens.
         camera_and_register_tokens = tokens[:, :, :patch_token_start]
+
+        # Normalize the camera/register tokens before feeding into the transformer blocks, 
+        # which empirically improves training stability.
         camera_and_register_tokens = self.token_norm(camera_and_register_tokens)
 
+        # (B, F, T, D) -> (B, F*T, D) where
+        # F - number of frames, T - number of camera/register tokens, D - token dimension.  
         camera_and_register_tokens = camera_and_register_tokens.reshape(batch_size, num_frames * patch_token_start, -1)
-        rope_sincos = None
+        rope_sincos = None # The released VGGT-Omega checkpoints do not use ROPE in the camera head, so we pass None here.
         for block in self.trunk:
             camera_and_register_tokens = block(camera_and_register_tokens, rope_sincos)
 
+        # (B, F*T, D) -> (B, F, T, D)
         camera_and_register_tokens = camera_and_register_tokens.reshape(batch_size, num_frames, patch_token_start, -1)
+
+        # Normalize the camera tokens before the final prediction layer.
         camera_tokens = self.trunk_norm(camera_and_register_tokens[:, :, 0])
-        return _apply_camera_activation(self.camera_branch(camera_tokens))
+        
+        # Predict camera parameters from the camera token (the first token of the camera/register tokens).
+        # (translation (3), quaternion (4), fov (1)) = 8 parameters in total.
+        camera_parameters = _apply_camera_activation(self.camera_branch(camera_tokens))
+
+        # Final shape is (B, F, 8) where the 8 parameters are (translation (3), quaternion (4), fov (2)).
+        return camera_parameters
 
 
 def _apply_camera_activation(raw_camera: torch.Tensor) -> torch.Tensor:
