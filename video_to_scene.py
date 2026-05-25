@@ -14,11 +14,14 @@ import cv2
 import numpy as np
 import torch
 from PIL import Image
+from rich.console import Console
 from torchvision import transforms as TF
 
 from visual_util import predictions_to_glb
 from vggt_omega.models import VGGTOmega
 from vggt_omega.utils.pose_enc import encoding_to_camera
+
+console = Console()
 
 
 def extract_frames(video_path: str, sample_fps: float) -> list[Image.Image]:
@@ -136,7 +139,7 @@ def load_model(checkpoint_path: str, device: str) -> VGGTOmega:
 
 def run_inference(frames: list[Image.Image], model: VGGTOmega, image_resolution: int, device: str) -> dict:
     images = preprocess_frames(frames, image_resolution=image_resolution).to(device)
-    print(f"  Input tensor: {tuple(images.shape)}")
+    console.log(f"Input tensor: {tuple(images.shape)}")
 
     with torch.inference_mode():
         predictions = model(images)
@@ -217,22 +220,22 @@ def main():
     output_path = args.output or (os.path.splitext(args.video)[0] + ".glb")
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
-    print(f"Loading model from {args.checkpoint} on {args.device}")
+    console.log(f"Loading model from [bold]{args.checkpoint}[/bold] on [bold]{args.device}[/bold]")
     model = load_model(args.checkpoint, args.device)
 
-    print(f"Extracting frames at {args.fps} fps...")
+    console.log(f"Extracting frames at {args.fps} fps...")
     frames = extract_frames(args.video, args.fps)
-    print(f"  Extracted {len(frames)} frames")
+    console.log(f"Extracted [bold]{len(frames)}[/bold] frames")
 
-    print("Running inference...")
+    console.log("Running inference...")
     predictions = run_inference(frames, model, args.image_resolution, args.device)
 
     if args.save_predictions:
         npz_path = os.path.splitext(output_path)[0] + "_predictions.npz"
         np.savez(npz_path, **predictions)
-        print(f"Predictions saved to {npz_path}")
+        console.log(f"Predictions saved to [bold]{npz_path}[/bold]")
 
-    print("Building GLB scene...")
+    console.log("Building GLB scene...")
     scene = predictions_to_glb(
         predictions,
         conf_thres=args.conf_thres,
@@ -243,7 +246,7 @@ def main():
         max_points=args.max_points,
     )
     scene.export(file_obj=output_path)
-    print(f"Scene saved to {output_path}")
+    console.log(f"Scene saved to [bold green]{output_path}[/bold green]")
 
 
 if __name__ == "__main__":
